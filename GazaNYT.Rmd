@@ -1,0 +1,31 @@
+---
+title: "Did New York Times Coverage Shift After Major Gaza Genocide-Related Legal Milestones?"
+author: "Mark Hamer"
+date: "March 26, 2026"
+output: html_document
+---
+
+## Introduction
+
+This project looks at whether New York Times coverage of the war in Gaza changed after major institutional rulings and findings related to genocide. Using article data from the New York Times API, I examine whether coverage volume rose, fell, or stayed roughly the same after key legal and humanitarian milestones between December 2023 and March 2026.
+
+The main question is whether mainstream coverage appears to shift around these events, or whether article volume moves independently of them.
+
+## Data Source
+
+Data comes from the New York Times Article Search API, which provides article metadata including publication date, headline, section, and keyword-search results. For this analysis, I use article counts rather than full text. Articles are retrieved by keyword and aggregated over time to examine whether coverage volume shifts around major legal and humanitarian milestones related to genocide allegations in Gaza.
+
+## Methodology
+
+The analysis uses three search queries to capture different layers of coverage. “Gaza” serves as a broad measure of overall coverage. “genocide Israel” captures articles that mention both genocide and Israel, offering a rough proxy for genocide-related framing. “ICJ Israel” captures coverage tied more specifically to legal proceedings involving the International Court of Justice.
+
+Articles are collected from December 29, 2023 through March 2026 and aggregated by month. I then plot monthly article counts in a time series and mark major institutional milestones with vertical reference lines. These include South Africa’s filing at the ICJ on December 29, 2023, the ICJ provisional measures order on January 26, 2024, the UN Special Rapporteur report on March 25, 2024, the ICC prosecutor’s request for arrest warrants on May 20, 2024, the ICJ Rafah order on May 24, 2024, and the ICC arrest warrants issued on November 21, 2024.
+
+This design does not measure tone or editorial position. Instead, it tests whether article volume associated with these keywords changes around major institutional developments.
+
+And your hurdles section is good. I’d just sharpen the language a bit:
+
+## Potential Hurdles
+
+Several limitations shape this analysis. First, keyword-based searches are imperfect proxies for topic framing, since relevant articles may use different language and unrelated articles may still match the search terms. Second, broad terms such as “Gaza” capture general coverage, not only reporting connected to legal or genocide-related developments. Third, article counts measure volume, not tone, emphasis, or agreement. A rise in coverage does not necessarily mean stronger recognition of genocide claims. Finally, some institutional developments unfolded over several days, which makes precise before-and-after comparisons harder to define.
+
