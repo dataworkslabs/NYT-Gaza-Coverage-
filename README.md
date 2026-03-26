@@ -1,1 +1,1 @@
-# NYT-Gaza-Coverage-
+# NYT-Gaza-Coverage
