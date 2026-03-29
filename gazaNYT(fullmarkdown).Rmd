@@ -1,0 +1,611 @@
+---
+title: "NYT API ON GAZA"
+author: "Mark Hamer"
+date: "2026-03-29"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Introduction
+
+This analysis looks at how the New York Times covered the Gaza conflict 
+between December 2023 and March 2026. Specifically, it asks whether 
+coverage using genocide-related language increased after major legal 
+and institutional rulings.
+
+The central question is simple: when organizations like the ICJ or ICC 
+made formal findings related to genocide, did the NYT start writing 
+about it more?
+
+To measure this, we tracked two things each month: the total number of 
+NYT articles mentioning "Gaza," and the number of those articles that 
+also mentioned "genocide Israel." Dividing the second by the first gives 
+us a monthly percentage — how much of Gaza coverage used genocide 
+language that month.
+
+Three keywords were tracked in total: "Gaza," "genocide Israel," and 
+"ICJ Israel." Data was collected using the NYT Article Search API, 
+which returns article counts by keyword and date range.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Load packages
+library(httr)
+library(jsonlite)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Your API key — do not share this document publicly
+api_key <- "dTWEcowLGuf5bwnZ4S6PhxraFZYZF5OdZrSYqkyMA7khRVCU"
+```
+
+```{r api-function}
+get_article_count <- function(keyword, year, month, api_key) {
+  
+  start_date <- sprintf("%d%02d01", year, month)
+  end_date <- sprintf("%d%02d%02d", year, month,
+                days_in_month(as.Date(paste(year, month, "01", sep = "-"))))
+  
+  response <- GET(
+    url = "https://api.nytimes.com/svc/search/v2/articlesearch.json",
+    query = list(
+      q = keyword,
+      begin_date = start_date,
+      end_date = end_date,
+      "api-key" = api_key
+    )
+  )
+  
+  parsed <- content(response, as = "parsed", type = "application/json")
+  
+  hits <- tryCatch({
+    val <- parsed$response$meta$hits
+    if (is.null(val) || length(val) == 0) 0 else as.integer(val)
+  }, error = function(e) {
+    message("Failed for: ", keyword, " ", year, "/", month)
+    return(0)
+  })
+  
+  return(data.frame(
+    keyword = keyword,
+    year = year,
+    month = month,
+    count = hits
+  ))
+}
+```
+
+
+
+```{r data-collection, cache=TRUE}
+# Define keywords and date range
+keywords <- c("Gaza", "genocide Israel", "ICJ Israel")
+
+# All months from December 2023 to March 2026
+dates <- seq(as.Date("2023-12-01"), as.Date("2026-03-01"), by = "month")
+
+# Empty list to store results
+results <- list()
+
+# Loop through every keyword and every month
+for (keyword in keywords) {
+  for (date in dates) {
+    date <- as.Date(date, origin = "1970-01-01")
+    year  <- as.integer(format(date, "%Y"))
+    month <- as.integer(format(date, "%m"))
+    
+    # Print progress so you know it's working
+    cat("Fetching:", keyword, year, month, "\n")
+    
+    # Call the API
+    row <- get_article_count(keyword, year, month, api_key)
+    results <- append(results, list(row))
+    
+    # Pause between calls to avoid hitting rate limits
+    Sys.sleep(6)
+  }
+}
+
+# Combine everything into one dataframe
+articles_df <- bind_rows(results)
+```
+
+```{r wrangling}
+library(tidyr)
+library(lubridate)
+
+# Create date column
+articles_df <- articles_df %>%
+  mutate(date = as.Date(paste(year, month, "01", sep = "-")))
+
+# Recode keywords to clean labels
+articles_df <- articles_df %>%
+  mutate(keyword = recode(keyword,
+    "Gaza"            = "Gaza",
+    "genocide Israel" = "Genocide + Israel",
+    "ICJ Israel"      = "ICJ + Israel"
+  ))
+
+# Pivot wider
+wide_df <- articles_df %>%
+  select(keyword, date, count) %>%
+  pivot_wider(names_from = keyword, values_from = count) %>%
+  rename(
+    gaza     = `Gaza`,
+    genocide = `Genocide + Israel`
+  ) %>%
+  mutate(pct_genocide = (genocide / gaza) * 100) %>%
+  filter(gaza > 0, pct_genocide > 0)
+
+# Remove known bad months with zero counts
+bad_months <- as.Date(c(
+  "2024-02-01", "2024-03-01", "2024-04-01",
+  "2024-05-01", "2024-06-01", "2024-11-01",
+  "2025-01-01", "2025-03-01"
+))
+
+wide_df <- wide_df %>%
+  filter(!date %in% bad_months)
+
+head(wide_df)
+```
+
+
+
+```{r visualization, fig.width=12, fig.height=6}
+
+milestones <- data.frame(
+  date = as.Date(c(
+    "2024-01-01",
+    "2024-05-01",
+    "2024-11-01"
+  )),
+  label = c(
+    "ICJ preliminary\nruling",
+    "ICJ orders halt\nof Rafah offensive",
+    "ICC arrest warrants\nfor Netanyahu"
+  )
+)
+
+# 3-month rolling average
+wide_df <- wide_df %>%
+  arrange(date) %>%
+  mutate(rolling_avg = zoo::rollmean(pct_genocide, k = 3, fill = NA, align = "right"))
+
+# Annotations
+annotations <- data.frame(
+  date  = as.Date(c("2024-03-01", "2025-07-01")),
+  y     = c(18, 17),
+  label = c("No sustained increase\naround ICJ ruling", "New baseline\nemerges in 2025")
+)
+
+ggplot(wide_df, aes(x = date, y = pct_genocide)) +
+  
+  # Faded gray bars for volume context
+  geom_col(aes(y = gaza / max(gaza, na.rm = TRUE) * max(pct_genocide, na.rm = TRUE)),
+         fill = "grey85", alpha = 0.12, width = 25) +
+  
+  # Raw line faint
+  geom_line(color = "#e63946", linewidth = 0.8, alpha = 0.4) +
+  geom_point(color = "#e63946", size = 2, alpha = 0.5) +
+  
+  # 3-month rolling average as main line
+  geom_line(aes(y = rolling_avg), color = "#e63946", linewidth = 1.6) +
+  
+  # Milestone vertical lines
+  geom_vline(data = milestones,
+             aes(xintercept = date),
+             linetype = "dashed",
+             color = "grey50",
+             alpha = 0.6) +
+  
+  # Milestone labels
+  geom_text(data = milestones,
+            aes(x = date, 
+                y = max(wide_df$pct_genocide, na.rm = TRUE) * 0.95,
+                label = label),
+            inherit.aes = FALSE,
+            hjust = -0.05,
+            size = 2.8,
+            color = "grey40") +
+  
+  # Analytical annotations
+  geom_label(data = annotations,
+             aes(x = date, y = y, label = label),
+             inherit.aes = FALSE,
+             size = 3,
+             color = "#333333",
+             fill = "white",
+             label.size = 0.3,
+             fontface = "italic") +
+  
+  scale_x_date(date_breaks = "2 months", date_labels = "%b %Y") +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  
+  labs(
+    title = "NYT genocide language shows no consistent sharp increases after legal rulings, but reaches a higher baseline by 2025",
+    subtitle = "% of Gaza articles mentioning 'genocide' | bold line = 3-month rolling average | gray bars = total Gaza article volume",
+    x        = "Month",
+    y        = "% of Gaza Articles Mentioning Genocide",
+    caption  = "Source: NYT Article Search API. Early percentages (Dec 2023–Mar 2024) reflect low total article volume and should be interpreted cautiously."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    plot.title       = element_text(face = "bold", size = 11),
+    plot.subtitle    = element_text(size = 9, color = "grey40"),
+    plot.caption     = element_text(hjust = 0, size = 8, color = "grey50"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Chart 1: NYT Gaza Coverage Over Time
+
+The first chart shows monthly article counts for Gaza-related coverage 
+from December 2023 through March 2026. The red line tracks overall Gaza 
+coverage and the bold line shows the three-month rolling average of the 
+percentage of articles mentioning genocide.
+
+A few things stand out immediately.
+
+Coverage was highest right after October 7, 2023 and dropped 
+significantly through mid-2024. This reflects the initial burst of 
+attention that typically follows a major news event.
+
+The percentage of Gaza articles mentioning genocide fluctuates throughout 
+the entire period. There is no clear moment where it permanently jumps 
+up following a legal ruling. The ICJ preliminary ruling in January 2024 
+coincides with a spike, but that spike does not persist into the 
+following months.
+
+By 2025, the percentage appears to stabilize at a somewhat higher level 
+than 2024. This suggests a gradual normalization of genocide language 
+in Gaza coverage rather than a direct response to any single event.
+
+The gray bars in the background show total Gaza article volume. Early 
+percentages, particularly in December 2023 and January 2024, should be 
+read with caution. The total number of articles was lower in those 
+months, which means a small number of genocide-related articles could 
+produce a misleadingly high percentage.
+
+
+```{r before-after-chart, fig.width=10, fig.height=6}
+library(forcats)
+
+# Hardcode confirmed values
+before_after_plot <- data.frame(
+  label  = factor(c("ICJ Rafah order", "ICC warrants", "ICJ preliminary ruling"),
+                  levels = c("ICJ Rafah order", "ICC warrants", "ICJ preliminary ruling")),
+  change = c(-3.62, 1.54, 1.83)
+)
+
+band_label <- data.frame(
+  label = "near zero change (±2%)",
+  x     = "ICJ Rafah order",
+  y     = 1.5
+)
+
+ggplot(before_after_plot, aes(x = label, y = change, color = change > 0)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -2, ymax = 2,
+           fill = "grey90", alpha = 0.5) +
+  geom_text(data = band_label,
+            aes(x = x, y = y, label = label),
+            inherit.aes = FALSE,
+            size = 3, color = "grey50", fontface = "italic") +
+  geom_hline(yintercept = 0, color = "grey30", linewidth = 0.8) +
+  geom_linerange(aes(ymin = 0, ymax = change),
+                 linewidth = 0.4, alpha = 0.3) +
+  geom_point(size = 6) +
+  geom_text(aes(label = paste0(ifelse(change > 0, "+", ""), round(change, 1), "%"),
+                vjust = ifelse(change > 0, -1.2, 2.2)),
+            size = 4, fontface = "bold", color = "grey20") +
+  scale_color_manual(values = c("TRUE" = "#e63946", "FALSE" = "#457b9d"),
+                     guide = "none") +
+  scale_y_continuous(labels = function(x) paste0(x, "%"),
+                     limits = c(-5, 3)) +
+  labs(
+    title    = "Changes are small (±2%) and inconsistent after each legal ruling",
+    subtitle = "Percentage point change in Gaza articles mentioning genocide:\n2-month average after minus 2-month average before each event",
+    x        = NULL,
+    y        = "Percentage point change",
+    caption  = "Source: NYT Article Search API. Red = increase, Blue = decrease after ruling."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 11),
+    plot.subtitle      = element_text(size = 9, color = "grey40"),
+    plot.caption       = element_text(hjust = 0, size = 8, color = "grey50"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank()
+  )
+```
+
+### Chart 2: Before vs. After Each Legal Ruling
+
+The second chart directly tests whether genocide language increased 
+after each major ruling. For each event, it compares the average 
+percentage of Gaza articles mentioning genocide in the two months 
+before versus the two months after.
+
+The results are mixed and small.
+
+After the ICJ preliminary ruling, there was a modest increase of 
+about 1.8 percentage points. After the ICC arrest warrants for 
+Netanyahu, the increase was similarly small at 1.5 percentage points. 
+After the ICJ Rafah order, coverage actually decreased by 3.6 
+percentage points.
+
+None of these changes are large. Two of the three fall within the 
+gray band marking near-zero change. The one negative result means 
+the direction is not even consistent across events.
+
+This is the clearest evidence against the idea that legal rulings 
+directly drive genocide language in NYT coverage. If rulings had a 
+real effect, you would expect to see consistent increases across all 
+three events. Instead the results point in different directions and 
+stay close to zero.
+
+One limitation worth noting: the two-month window before and after 
+each event is a simple measure. A longer window might tell a 
+different story. But within this timeframe, there is no consistent 
+pattern.
+
+```{r baseline-shift-chart, fig.width=10, fig.height=6}
+
+# Create year period grouping
+wide_df_period <- wide_df %>%
+  mutate(period = case_when(
+    date < as.Date("2025-01-01") ~ "2024",
+    TRUE                         ~ "2025-2026"
+  ))
+
+# Sample sizes for labels
+n_labels <- wide_df_period %>%
+  group_by(period) %>%
+  summarise(n = n(), med = median(pct_genocide, na.rm = TRUE)) %>%
+  mutate(x_label = paste0(period, "\n(n=", n, " months)"))
+
+ggplot(wide_df_period, aes(x = period, y = pct_genocide, color = period)) +
+  
+  # Light box
+  geom_boxplot(aes(fill = period), alpha = 0.05,
+               outlier.shape = NA, width = 0.4, color = "grey70") +
+  
+  # Individual dots
+  geom_jitter(size = 4, width = 0.08, alpha = 0.8) +
+  
+  # Thicker median line
+  stat_summary(fun = median, geom = "crossbar",
+               width = 0.35, linewidth = 1.2,
+               color = "grey15", fatten = 0) +
+  
+  # Median value labels
+  stat_summary(fun = median, geom = "text",
+               aes(label = paste0("median: ", round(after_stat(y), 1), "%")),
+               vjust = -1.2, size = 3.5, fontface = "bold", color = "grey20") +
+  
+  # Difference annotation — text only, no arrow
+  annotate("text", x = 1.5, y = 23,
+           label = "+3.0 pp median increase",
+           size = 3.8, fontface = "bold", color = "grey25") +
+  
+  # Sample size on x axis
+  scale_x_discrete(labels = c(
+    "2024"      = paste0("2024\n(n=", n_labels$n[n_labels$period == "2024"], " months)"),
+    "2025-2026" = paste0("2025-2026\n(n=", n_labels$n[n_labels$period == "2025-2026"], " months)")
+  )) +
+  
+  scale_color_manual(values = c("2024" = "#6b9db8", "2025-2026" = "#c0392b"),
+                     guide = "none") +
+  scale_fill_manual(values = c("2024" = "#6b9db8", "2025-2026" = "#c0392b"),
+                    guide = "none") +
+  scale_y_continuous(labels = function(x) paste0(x, "%"),
+                     limits = c(0, 25)) +
+  
+  labs(
+    title    = "Genocide language is higher in 2025-2026 than in 2024",
+    subtitle = "Monthly % of Gaza articles mentioning genocide | each dot = one month | line = median",
+    x        = NULL,
+    y        = "% of Gaza Articles Mentioning Genocide",
+    caption  = "Source: NYT Article Search API. Box shows interquartile range."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title         = element_text(face = "bold", size = 11),
+    plot.subtitle      = element_text(size = 9, color = "grey40"),
+    plot.caption       = element_text(hjust = 0, size = 8, color = "grey50"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank()
+  )
+```
+### Chart 3: Baseline Shift Between 2024 and 2025-2026
+
+The third chart steps back from individual events and asks a broader 
+question. Is genocide language simply more common in 2025-2026 than 
+it was in 2024, regardless of what triggered it?
+
+The answer appears to be yes.
+
+The median percentage of Gaza articles mentioning genocide was 8.2% 
+in 2024. In 2025-2026 that figure rose to 11.2%. That is a difference 
+of about 3 percentage points.
+
+Looking at the individual dots, the 2025-2026 group sits noticeably 
+higher overall. Most months in that period fall between 10% and 15%. 
+Most months in 2024 fall between 6% and 13%.
+
+There is some overlap between the two groups. A few months in 
+2025-2026 dip as low as 4%. So this is not a clean separation. 
+But the overall shift is real and visible.
+
+This finding is actually more interesting than the event-based 
+analysis. It suggests that genocide language became more normalized 
+in NYT Gaza coverage over time. The shift does not appear to be 
+tied to any single ruling or announcement. It looks more like a 
+gradual editorial drift toward accepting that framing.
+
+The sample sizes are worth keeping in mind. There are 12 months in 
+the 2024 group and a smaller number in 2025-2026. More data over 
+time would help confirm whether this shift holds.
+
+
+```{r event-centered-chart, fig.width=11, fig.height=6}
+
+# Define events
+events <- data.frame(
+  event = c("ICJ preliminary ruling",
+            "ICJ Rafah order",
+            "ICC arrest warrants"),
+  date  = as.Date(c("2024-01-01", "2024-05-01", "2024-11-01"))
+)
+
+# Build event-centered data
+event_df <- events %>%
+  rowwise() %>%
+  do({
+    ev <- .
+    wide_df %>%
+      mutate(
+        months_rel = interval(ev$date, date) %/% months(1),
+        event      = ev$event
+      ) %>%
+      filter(months_rel >= -3, months_rel <= 3)
+  }) %>%
+  ungroup()
+
+# Average line across events at each time point
+avg_df <- event_df %>%
+  group_by(months_rel) %>%
+  summarise(avg_pct = mean(pct_genocide, na.rm = TRUE))
+
+ggplot(event_df, aes(x = months_rel, y = pct_genocide, color = event)) +
+  
+  # Softer vertical ruling line
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey60", linewidth = 0.6, alpha = 0.6) +
+  
+  # Faint individual lines
+  geom_line(linewidth = 0.7, alpha = 0.35) +
+  geom_point(size = 2.5, alpha = 0.45) +
+  
+  # Bold average line
+  geom_line(data = avg_df, aes(x = months_rel, y = avg_pct),
+            inherit.aes = FALSE,
+            color = "grey10", linewidth = 2.2) +
+  geom_point(data = avg_df, aes(x = months_rel, y = avg_pct),
+             inherit.aes = FALSE,
+             color = "grey10", size = 4) +
+  
+  # Average line label
+  annotate("text", x = 3.1, y = avg_df$avg_pct[avg_df$months_rel == 3],
+           label = "average across events", size = 3.2,
+           color = "grey10", fontface = "bold", hjust = 0) +
+  
+  # Spike context note
+  annotate("text", x = 0.15, y = 21,
+           label = "Spike driven by\none event; not repeated",
+           size = 2.8, color = "grey35",
+           fontface = "italic", hjust = 0) +
+  
+  # No consistent increase annotation
+  annotate("text", x = 1, y = 24,
+           label = "No consistent increase at +1 month",
+           size = 3, color = "grey30", fontface = "italic") +
+  
+  scale_x_continuous(breaks = -3:3,
+                     labels = c("-3", "-2", "-1", "0\n(ruling)", "+1", "+2", "+3")) +
+  scale_y_continuous(labels = function(x) paste0(x, "%"),
+                     limits = c(0, 26)) +
+  scale_color_manual(values = c(
+    "ICJ preliminary ruling" = "#e63946",
+    "ICJ Rafah order"        = "#457b9d",
+    "ICC arrest warrants"    = "#2a9d8f"
+  )) +
+  
+  labs(
+    title    = "No consistent pattern in genocide language around major legal rulings",
+    subtitle = "% of Gaza articles mentioning genocide, centered on each ruling | bold line = average across events",
+    x        = "Months relative to ruling",
+    y        = "% of Gaza Articles Mentioning Genocide",
+    color    = "Event",
+    caption  = "Source: NYT Article Search API. Month 0 = month of ruling."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 11),
+    plot.subtitle    = element_text(size = 9, color = "grey40"),
+    plot.caption     = element_text(hjust = 0, size = 8, color = "grey50"),
+    panel.grid.minor = element_blank(),
+    legend.position  = "bottom"
+  )
+```
+### Chart 4: Coverage Centered Around Each Ruling
+
+The fourth chart looks at each ruling individually and tracks what 
+happened in the three months before and after. All three events are 
+plotted on the same axis with month 0 marking the ruling itself.
+
+The bold black line shows the average across all three events.
+
+The average line is relatively flat. It rises slightly at month 0 
+and then falls back down. There is no sustained increase in the 
+months following any of the rulings.
+
+The individual event lines tell different stories. The ICJ preliminary 
+ruling in January 2024 shows a spike at month 0 but that spike is 
+driven largely by one month of elevated coverage and does not repeat 
+across the other events. The ICJ Rafah order and ICC arrest warrants 
+show no comparable spike.
+
+This inconsistency is the key finding. If legal rulings consistently 
+drove genocide language in NYT coverage, you would expect the lines 
+to move in the same direction at the same time. They do not.
+
+The average line captures this well. Because the individual events 
+move in different directions, the average stays close to flat. That 
+flat average is the clearest visual argument that rulings do not 
+produce a consistent editorial response.
+
+One caveat: with only three events, it is hard to draw firm 
+conclusions. A larger sample of rulings would make this analysis 
+more robust.
+
+## Conclusion
+
+This analysis tracked NYT genocide language in Gaza coverage across 
+three major legal and institutional milestones between December 2023 
+and March 2026.
+
+The main finding is straightforward. There is no consistent immediate 
+increase in genocide-related language following major legal rulings. 
+The before/after analysis shows mixed and small changes. The 
+event-centered chart shows no shared pattern across events. Rulings 
+do not appear to directly trigger a shift in how the NYT frames 
+Gaza coverage.
+
+The more interesting finding is the gradual one. Genocide language 
+does appear to have become more common over time. The median 
+percentage in 2025-2026 is about 3 percentage points higher than 
+in 2024. This suggests a slow normalization of the term rather than 
+a reaction to specific events.
+
+There are real limitations to this analysis. Missing months due to 
+API rate limits created gaps in the data. The keyword approach 
+measures mentions of the word genocide but not how it is used. An 
+article can mention genocide while arguing against the framing. 
+Volume alone does not capture tone or editorial stance.
+
+Despite those limitations the data tells a consistent story across 
+four different chart types. Legal rulings do not appear to move the 
+needle immediately. But over time the language is shifting.
+
+Whether that shift reflects editorial change, public pressure, or 
+simply the accumulation of legal findings is a question this data 
+cannot answer. But it is a question worth asking.
+
+
+
